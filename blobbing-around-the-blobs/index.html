@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blobbing Around the Blobs</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:#10041d;color:#f8efff}
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;overflow:hidden}
+canvas{display:block;width:100%;height:100%;background:#10041d}
+#panel{position:fixed;z-index:2;top:16px;right:16px;bottom:16px;width:280px;overflow:auto;padding:20px;border:1px solid #ffffff20;border-radius:18px;background:#160d21eF;box-shadow:0 12px 48px #08020db3;backdrop-filter:blur(18px);scrollbar-color:#766185 transparent}
+h1{font-size:20px;line-height:1.15;letter-spacing:-.04em;margin:0 0 8px}
+.sub,.credit,.hint{color:#bcb0c7;font-size:12px;line-height:1.5;margin:0}
+.credit{margin-top:6px;color:#e4a8fa}
+.rule{height:1px;background:#ffffff17;margin:18px 0}
+.slider{margin:15px 0}
+.slider-head,.color-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:12px}
+.slider output{color:#e8baff;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;height:4px;accent-color:#df72ff;cursor:pointer}
+.aspect-label{display:block;font-size:12px;margin-bottom:8px}
+select{width:100%;padding:9px 10px;color:#fff;background:#24182f;border:1px solid #ffffff24;border-radius:9px}
+.colors{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.color{display:flex;align-items:center;gap:8px;min-width:0;color:#ded3e6;font-size:11px}
+input[type=color]{width:30px;height:28px;padding:2px;border:1px solid #ffffff30;border-radius:7px;background:#24182f;cursor:pointer}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{padding:10px 8px;color:#f8efff;background:#281a34;border:1px solid #ffffff20;border-radius:9px;font:inherit;font-size:12px;cursor:pointer;transition:background .15s,border-color .15s}
+button:hover{background:#3a2448;border-color:#d28af0}
+button.primary{grid-column:1/-1;background:#77349a;border-color:#aa5ac9}
+button.move-button{grid-column:1/-1}
+button.move-button.active{background:#6a3688;border-color:#e4a4ff;color:#fff}
+#recording{display:none;margin:12px 0 0;color:#ff6888;font-size:12px;font-weight:700}
+#recording.active{display:block}
+.hint{margin-top:14px}
+.hidden{display:none!important}
+@media(max-width:560px){#panel{top:10px;right:10px;bottom:10px;width:min(280px,calc(100vw - 20px));padding:16px}}
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Animated looping blob artwork"></canvas>
+<aside id="panel">
+  <h1>Blobbing Around<br>the Blobs</h1>
+  <p class="sub">A slow, shape-shifting loop for a moment of calm.</p>
+  <p class="credit">Designed by Ishita</p>
+  <div class="rule"></div>
+  <div id="sliders"></div>
+  <div class="rule"></div>
+  <label class="aspect-label" for="aspect">Canvas shape</label>
+  <select id="aspect">
+    <option value="full">Fill window</option><option value="16:9">16:9 Landscape</option>
+    <option value="1:1">1:1 Square</option><option value="9:16">9:16 Portrait</option>
+  </select>
+  <div class="rule"></div>
+  <div class="color-head">Color palette</div>
+  <div class="colors" id="colors"></div>
+  <div class="rule"></div>
+  <div class="buttons">
+    <button id="play">Pause · Space</button><button id="random">Random · R</button>
+    <button id="reset">Reset</button><button id="save">Save PNG · S</button>
+    <button class="move-button" id="move">Move blobs</button>
+    <button class="primary" id="record">Record 5 sec · V</button>
+  </div>
+  <div id="recording">● REC</div>
+  <p class="hint" id="hint">H hides this panel · the artwork loops every 8 seconds.</p>
+</aside>
+<script>
+// SETTINGS
+const SLIDERS = [
+  { id:"centerX", label:"Center · X axis", min:-100, max:100, step:1, value:0 },
+  { id:"centerY", label:"Center · Y axis", min:-100, max:100, step:1, value:0 },
+  { id:"shape", label:"Organic shape", min:0, max:20, step:1, value:13 },
+  { id:"layers", label:"Layers", min:0, max:100, step:1, value:34 },
+  { id:"speed", label:"Wave speed", min:0, max:100, step:1, value:42 },
+  { id:"rotation", label:"Blob rotation", min:0, max:100, step:1, value:24 }
+];
+const COLORS = { background:"#10041d", palette:[
+  {name:"Orchid",value:"#ed35e8"},{name:"Aqua",value:"#63f1eb"},
+  {name:"Periwinkle",value:"#718eff"},{name:"Blush",value:"#ff9acb"},
+  {name:"Butter",value:"#ffe4a0"},{name:"Lavender",value:"#d8b7ff"}
+] };
+const LOOP_SECONDS = 8;
+
+// STATE
+const canvas = document.querySelector("#canvas"), ctx = canvas.getContext("2d");
+const values = Object.fromEntries(SLIDERS.map(s => [s.id,s.value]));
+const palette = COLORS.palette.map(c => c.value);
+const DEFAULT_ANCHORS = [
+  [.16,.16,.20,.24], [.51,.16,.22,.25], [.85,.19,.18,.23],
+  [.24,.49,.23,.26], [.73,.49,.23,.26], [.13,.82,.20,.23],
+  [.51,.82,.24,.25], [.88,.81,.20,.24]
+];
+const anchors = DEFAULT_ANCHORS.map(anchor=>anchor.slice());
+let width=0,height=0,dpr=1,aspect="full",running=true,elapsed=0,lastFrame=0,recorder=null;
+let moving=false,selectedBlob=-1,draggingBlob=-1;
+
+// SETUP
+function buildUI(){
+  const host=document.querySelector("#sliders");
+  SLIDERS.forEach(setting=>{
+    const row=document.createElement("div"); row.className="slider";
+    row.innerHTML=`<div class="slider-head"><label for="${setting.id}">${setting.label}</label><output id="${setting.id}Value">${setting.value}</output></div><input id="${setting.id}" type="range" min="${setting.min}" max="${setting.max}" step="${setting.step}" value="${setting.value}">`;
+    const input=row.querySelector("input");
+    input.addEventListener("input",()=>{values[setting.id]=Number(input.value);row.querySelector("output").value=input.value;});
+    host.append(row);
+  });
+  const colorHost=document.querySelector("#colors");
+  COLORS.palette.forEach((color,i)=>{
+    const label=document.createElement("label"); label.className="color";
+    label.innerHTML=`<input type="color" aria-label="${color.name} color" value="${color.value}"><span>${color.name}</span>`;
+    label.querySelector("input").addEventListener("input",e=>palette[i]=e.target.value);
+    colorHost.append(label);
+  });
+  resize();
+}
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2);
+  canvas.width=Math.round(innerWidth*dpr); canvas.height=Math.round(innerHeight*dpr);
+  canvas.style.width=`${innerWidth}px`; canvas.style.height=`${innerHeight}px`;
+  const ratio=aspect==="16:9"?16/9:aspect==="9:16"?9/16:aspect==="1:1"?1:innerWidth/innerHeight;
+  if(aspect==="full"){width=innerWidth;height=innerHeight;}
+  else if(innerWidth/innerHeight>ratio){height=innerHeight;width=height*ratio;}
+  else{width=innerWidth;height=width/ratio;}
+}
+
+// UPDATE
+function frame(now){
+  if(running&&lastFrame) elapsed=(elapsed+(now-lastFrame)/1000)%LOOP_SECONDS;
+  lastFrame=now; draw(); requestAnimationFrame(frame);
+}
+function setPlaying(){
+  running=!running; document.querySelector("#play").textContent=running?"Pause · Space":"Play · Space";
+  lastFrame=0;
+}
+function syncControls(){
+  SLIDERS.forEach(s=>{const input=document.querySelector(`#${s.id}`);input.value=values[s.id];document.querySelector(`#${s.id}Value`).value=values[s.id];});
+}
+
+// DRAW
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.fillStyle=COLORS.background;ctx.fillRect(0,0,innerWidth,innerHeight);
+  const ox=(innerWidth-width)/2,oy=(innerHeight-height)/2;
+  ctx.save();ctx.translate(ox,oy);ctx.beginPath();ctx.rect(0,0,width,height);ctx.clip();
+  ctx.fillStyle=COLORS.background;ctx.fillRect(0,0,width,height);
+  const phase=elapsed/LOOP_SECONDS*Math.PI*2;
+  const timing=phase+(values.speed/100-.5)*Math.sin(phase*2);
+  const layers=Math.round(values.layers);
+  const cx=values.centerX/200*width,cy=values.centerY/200*height,organic=values.shape/20;
+  anchors.forEach((a,index)=>{
+    const bx=width*a[0]+cx,by=height*a[1]+cy;
+    const base=Math.min(width,height)*a[2],squash=a[3]/a[2];
+    const turn=Math.sin(phase+index*.77)*(values.rotation/100)*Math.PI*2;
+    for(let layer=layers-1;layer>=0;layer--){
+      const scale=(layer+1)/Math.max(layers,1);
+      const radius=base*scale*(1+.018*Math.sin(timing+index));
+      const color=palette[(layer+index*2)%palette.length];
+      const glow=ctx.createRadialGradient(bx-radius*.28,by-radius*squash*.32,0,bx,by,Math.max(radius*1.18,.5));
+      glow.addColorStop(0,"rgba(255,255,255,.82)");
+      glow.addColorStop(.16,hexToRgba(color,.92));
+      glow.addColorStop(.52,hexToRgba(palette[(layer+index*2+1)%palette.length],.66));
+      glow.addColorStop(.84,hexToRgba(color,.52));
+      glow.addColorStop(1,hexToRgba(color,.22));
+      ctx.fillStyle=glow;
+      traceBlob(bx,by,radius,radius*squash,turn,organic,timing,index,layer);
+      ctx.fill();
+      ctx.lineWidth=1.15;
+      ctx.strokeStyle=hexToRgba(color,.58);
+      ctx.stroke();
+      ctx.lineWidth=.65;
+      ctx.strokeStyle="rgba(255,255,255,.18)";
+      ctx.stroke();
+    }
+    if(moving){
+      ctx.beginPath();ctx.arc(bx,by,selectedBlob===index?17:13,0,Math.PI*2);
+      ctx.fillStyle=selectedBlob===index?"rgba(255,255,255,.24)":"rgba(16,4,29,.58)";
+      ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle=selectedBlob===index?"#fff":"rgba(255,255,255,.72)";ctx.stroke();
+      ctx.fillStyle="#fff";ctx.font="600 11px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.fillText(String(index+1),bx,by);
+    }
+  });
+  ctx.restore();
+}
+function hexToRgba(hex,alpha){
+  const value=Number.parseInt(hex.slice(1),16);
+  return `rgba(${value>>16},${value>>8&255},${value&255},${alpha})`;
+}
+function traceBlob(x,y,rx,ry,rotation,organic,time,seed,layer){
+  const points=20,coords=[];
+  for(let i=0;i<points;i++){
+    const angle=i/points*Math.PI*2;
+    const wobble=1+organic*(.13*Math.sin(angle*3+time+seed)+.075*Math.sin(angle*5-time*2+seed*1.8)+.035*Math.cos(angle*7+time*3+layer));
+    const a=angle+rotation;
+    coords.push([x+Math.cos(a)*rx*wobble,y+Math.sin(a)*ry*wobble]);
+  }
+  const mid=(a,b)=>[(a[0]+b[0])/2,(a[1]+b[1])/2];
+  const first=mid(coords[0],coords[1]);
+  ctx.beginPath();ctx.moveTo(first[0],first[1]);
+  for(let i=1;i<=points;i++){
+    const p=coords[i%points],m=mid(p,coords[(i+1)%points]);ctx.quadraticCurveTo(p[0],p[1],m[0],m[1]);
+  }
+  ctx.closePath();
+}
+
+// INPUT
+function isTyping(target){return target instanceof HTMLElement&&(target.matches("input,textarea,select")||target.isContentEditable);}
+document.addEventListener("keydown",event=>{
+  if(isTyping(event.target))return;
+  if(event.code==="Space"){event.preventDefault();setPlaying();}
+  else if(event.key.toLowerCase()==="h")document.querySelector("#panel").classList.toggle("hidden");
+  else if(event.key.toLowerCase()==="r")document.querySelector("#random").click();
+  else if(event.key.toLowerCase()==="s")document.querySelector("#save").click();
+  else if(event.key.toLowerCase()==="v")document.querySelector("#record").click();
+});
+window.addEventListener("resize",resize);
+document.querySelector("#aspect").addEventListener("change",event=>{aspect=event.target.value;resize();});
+const moveButton=document.querySelector("#move");
+moveButton.addEventListener("click",()=>{
+  moving=!moving;draggingBlob=-1;
+  moveButton.classList.toggle("active",moving);
+  moveButton.textContent=moving?"Done moving blobs":"Move blobs";
+  document.querySelector("#hint").textContent=moving
+    ?"Drag any numbered blob to place it. Select Done moving blobs when finished."
+    :"H hides this panel · the artwork loops every 8 seconds.";
+  canvas.style.cursor=moving?"grab":"default";
+  if(!moving)selectedBlob=-1;
+});
+canvas.addEventListener("pointerdown",event=>{
+  if(!moving)return;
+  const rect=canvas.getBoundingClientRect();
+  const px=(event.clientX-rect.left)*(innerWidth/rect.width)-(innerWidth-width)/2;
+  const py=(event.clientY-rect.top)*(innerHeight/rect.height)-(innerHeight-height)/2;
+  const offsetX=values.centerX/200*width,offsetY=values.centerY/200*height;
+  let closest=-1,closestDistance=Infinity;
+  anchors.forEach((anchor,index)=>{
+    const x=width*anchor[0]+offsetX,y=height*anchor[1]+offsetY;
+    const distance=Math.hypot(px-x,py-y);
+    if(distance<Math.max(Math.min(width,height)*anchor[2]*1.15,32)&&distance<closestDistance){
+      closest=index;closestDistance=distance;
+    }
+  });
+  if(closest<0)return;
+  selectedBlob=closest;draggingBlob=closest;canvas.setPointerCapture(event.pointerId);
+  canvas.style.cursor="grabbing";event.preventDefault();
+});
+canvas.addEventListener("pointermove",event=>{
+  if(draggingBlob<0)return;
+  const rect=canvas.getBoundingClientRect();
+  const px=(event.clientX-rect.left)*(innerWidth/rect.width)-(innerWidth-width)/2;
+  const py=(event.clientY-rect.top)*(innerHeight/rect.height)-(innerHeight-height)/2;
+  anchors[draggingBlob][0]=Math.max(0,Math.min(1,(px-values.centerX/200*width)/width));
+  anchors[draggingBlob][1]=Math.max(0,Math.min(1,(py-values.centerY/200*height)/height));
+});
+function stopDragging(){draggingBlob=-1;if(moving)canvas.style.cursor="grab";}
+canvas.addEventListener("pointerup",stopDragging);
+canvas.addEventListener("pointercancel",stopDragging);
+document.querySelector("#play").addEventListener("click",setPlaying);
+document.querySelector("#random").addEventListener("click",()=>{
+  SLIDERS.forEach(s=>{const steps=(s.max-s.min)/s.step;values[s.id]=s.min+Math.round(Math.random()*steps)*s.step;});
+  syncControls();
+});
+document.querySelector("#reset").addEventListener("click",()=>{
+  SLIDERS.forEach(s=>values[s.id]=s.value);syncControls();
+  DEFAULT_ANCHORS.forEach((anchor,index)=>{anchors[index]=anchor.slice();});
+  COLORS.palette.forEach((c,i)=>{palette[i]=c.value;document.querySelectorAll("#colors input")[i].value=c.value;});
+});
+
+// UI
+document.querySelector("#save").addEventListener("click",()=>{
+  const link=document.createElement("a");link.download="blobbing-around.png";link.href=canvas.toDataURL("image/png");link.click();
+});
+document.querySelector("#record").addEventListener("click",()=>{
+  if(!canvas.captureStream||!window.MediaRecorder){alert("Video recording is not supported in this browser.");return;}
+  const mime=["video/mp4","video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"].find(type=>MediaRecorder.isTypeSupported(type));
+  if(!mime){alert("This browser does not support MP4 or WebM recording.");return;}
+  const chunks=[],stream=canvas.captureStream(30);
+  try{recorder=new MediaRecorder(stream,{mimeType:mime});}
+  catch(error){stream.getTracks().forEach(track=>track.stop());alert(`Could not start recording: ${error.message}`);return;}
+  recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
+  recorder.onstop=()=>{
+    const blob=new Blob(chunks,{type:mime}),url=URL.createObjectURL(blob),link=document.createElement("a");
+    link.href=url;link.download=`blobbing-around.${mime.includes("mp4")?"mp4":"webm"}`;link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);stream.getTracks().forEach(track=>track.stop());
+    document.querySelector("#recording").classList.remove("active");
+  };
+  recorder.start();document.querySelector("#recording").classList.add("active");
+  setTimeout(()=>{if(recorder&&recorder.state==="recording")recorder.stop();},5000);
+});
+
+// EXPORT
+buildUI();requestAnimationFrame(frame);
+</script>
+</body>
+</html>
